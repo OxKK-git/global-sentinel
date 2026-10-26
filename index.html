@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Global Sentinel</title>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
+<style>
+:root{--bg:#04070d;--panel:#0a1220;--line:#123049;--cyan:#22d3ee;--green:#34d399;--amber:#fbbf24;--red:#f87171;--text:#dceaf5;--muted:#8aa4b8}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif}
+.app{display:grid;grid-template-columns:270px 1fr 330px;grid-template-rows:auto 1fr;height:100vh}
+header{grid-column:1/4;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-content:space-between;padding:12px 18px;background:linear-gradient(90deg,#04070d,#081524,#04070d);border-bottom:1px solid var(--line)}
+.logo{font-weight:800;letter-spacing:.22em;color:var(--cyan)}
+.status{font-size:12px;color:#7dd3fc;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center}
+.badge{font-size:11px;font-weight:700;letter-spacing:.08em;padding:3px 9px;border-radius:99px;border:1px solid var(--amber);color:var(--amber)}
+.badge.live{border-color:var(--green);color:var(--green)}
+.left,.right{background:var(--panel);padding:14px;overflow-y:auto;min-height:0}
+.left{border-right:1px solid var(--line)}
+.right{border-left:1px solid var(--line)}
+h2{font-size:11px;letter-spacing:.18em;color:#67e8f9;margin:14px 0 8px;text-transform:uppercase}
+h2:first-child{margin-top:0}
+.card{background:#081120;border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+.metric{display:flex;justify-content:space-between;font-size:13px;margin:6px 0}
+.bar{height:6px;background:#122334;border-radius:99px;overflow:hidden}
+.bar span{display:block;height:100%;border-radius:99px}
+.note{font-size:11px;color:var(--muted);line-height:1.4;margin-top:6px}
+main{min-height:0;position:relative}
+#map{width:100%;height:100%}
+#mapmsg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;padding:20px;text-align:center;color:var(--muted);font-size:13px}
+.layer{display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0;cursor:pointer}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.feed-item{border-left:3px solid var(--cyan);padding:8px 10px;margin-bottom:8px;background:#081120;border-radius:6px;font-size:12px;line-height:1.4}
+.feed-item.high{border-color:var(--red)}
+.feed-item.med{border-color:var(--amber)}
+.feed-item a{color:#7dd3fc;text-decoration:none}
+.feed-item a:hover{text-decoration:underline}
+.feed-item small{color:var(--muted)}
+.tag{font-size:10px;padding:2px 6px;border-radius:99px;background:#0f2b3d;color:#67e8f9;margin-right:5px}
+.empty{font-size:12px;color:var(--muted)}
+.maplibregl-popup-content{background:#0a1220;color:var(--text);border:1px solid var(--line);font-size:12px}
+.maplibregl-popup-content a{color:#7dd3fc}
+.maplibregl-popup-tip{display:none}
+
+@media (max-width:900px){
+  html,body{height:auto}
+  .app{display:flex;flex-direction:column;height:auto}
+  header{padding:10px 16px}
+  main{height:55vh;min-height:320px;order:1}
+  .left{order:2;border-right:0;border-top:1px solid var(--line);overflow:visible}
+  .right{order:3;border-left:0;border-top:1px solid var(--line);overflow:visible}
+}
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+<div class="logo">GLOBAL SENTINEL</div>
+<div class="status">
+  <span class="badge" id="mode">SAMPLE DATA</span>
+  <span>SYSTEM INTEGRITY: <b id="integrity">-</b></span>
+  <span>LAST SYNC: <span id="sync">-</span></span>
+</div>
+</header>
+
+<aside class="left">
+<h2>Domain Stress</h2>
+<div id="gauges"></div>
+<h2>Composite</h2>
+<div class="card">
+  <div class="metric"><span>Global System Stress</span><b id="composite">-</b></div>
+  <div class="bar"><span id="composite-bar" style="width:0%;background:var(--cyan)"></span></div>
+  <div class="note" id="method"></div>
+</div>
+<h2>Layers</h2>
+<div class="card" id="layers"></div>
+<div class="note">Analytical estimate, not a prediction. Check source links, dates and confidence before acting.</div>
+</aside>
+
+<main>
+  <div id="map"></div>
+  <div id="mapmsg">The map could not load. The event feed on the side still works.</div>
+</main>
+
+<aside class="right">
+<h2>Event Feed</h2>
+<div id="feed"></div>
+</aside>
+</div>
+
+<script>
+/* ---------- Config ---------- */
+const DATA_URL = 'data/events.json';   // optional; if missing, sample data is shown
+const TYPES = {
+  cyber: { label: 'AI / Cyber',      color: '#22d3ee' },
+  press: { label: 'Press Freedom',   color: '#f87171' },
+  geo:   { label: 'Geopolitics',     color: '#fbbf24' },
+  econ:  { label: 'Economic Stress', color: '#34d399' },
+};
+const SAMPLE_EVENTS = [
+  { type:'cyber', coords:[77.59,12.97], title:'Sample: AI-enabled phishing campaign', severity:3, source:'https://www.cisa.gov', date:'sample' },
+  { type:'press', coords:[-3.7,40.4],  title:'Sample: journalist safety concern',     severity:4, source:'https://cpj.org', date:'sample' },
+  { type:'geo',   coords:[37.6,55.7],   title:'Sample: geopolitical escalation watch', severity:4, source:'https://reliefweb.int', date:'sample' },
+  { type:'econ',  coords:[-74,40.7],    title:'Sample: market concentration update',   severity:2, source:'https://data.worldbank.org', date:'sample' },
+];
+const SAMPLE_DOMAINS = [['Cyber / AI',62],['Press Freedom',71],['Geopolitical',58],['Economic',49],['Social Cohesion',54],['Institutional Trust',66]];
+
+/* ---------- Safe DOM helpers (feed text is untrusted) ---------- */
+function el(tag, props, kids){
+  const n = document.createElement(tag);
+  for (const [k,v] of Object.entries(props||{})) {
+    if (k === 'class') n.className = v;
+    else if (k === 'text') n.textContent = v;
+    else n.setAttribute(k, v);
+  }
+  (kids||[]).forEach(c => n.appendChild(c));
+  return n;
+}
+function safeUrl(u){
+  try { const x = new URL(u); return (x.protocol === 'http:' || x.protocol === 'https:') ? x.href : null; }
+  catch(e){ return null; }
+}
+function linkEl(text, url){
+  const href = safeUrl(url);
+  if (!href) return el('span', {text});
+  return el('a', {href, target:'_blank', rel:'noopener noreferrer', text});
+}
+const colorFor = v => v > 70 ? 'var(--red)' : v > 55 ? 'var(--amber)' : 'var(--green)';
+
+/* ---------- Map ---------- */
+let map = null, mapReady = false, currentEvents = [];
+const visible = {};
+Object.keys(TYPES).forEach(k => visible[k] = true);
+
+function initMap(){
+  if (typeof maplibregl === 'undefined') { document.getElementById('mapmsg').style.display = 'flex'; return; }
+  try {
+    map = new maplibregl.Map({ container:'map', style:'https://demotiles.maplibre.org/style.json', center:[20,20], zoom:1.4 });
+    map.addControl(new maplibregl.NavigationControl());
+    map.on('load', () => { mapReady = true; drawMarkers(); });
+    map.on('error', () => {});
+    map.on('click', e => {
+      const f = map.queryRenderedFeatures(e.point, { layers: Object.keys(TYPES).filter(k => map.getLayer(k)) });
+      if (!f.length) return;
+      const p = f[0].properties;
+      const box = el('div', {}, [
+        el('b', {text:p.title}), el('br'),
+        el('span', {text:'Severity: ' + p.severity + '/5'}), el('br'),
+        linkEl('Open source', p.source),
+      ]);
+      new maplibregl.Popup().setLngLat(e.lngLat).setDOMContent(box).addTo(map);
+    });
+  } catch (err) { document.getElementById('mapmsg').style.display = 'flex'; }
+}
+
+function drawMarkers(){
+  if (!mapReady) return;
+  for (const [k, t] of Object.entries(TYPES)) {
+    const feats = currentEvents
+      .filter(e => e.type === k && Array.isArray(e.coords) && e.coords.length === 2)
+      .map(e => ({ type:'Feature', geometry:{ type:'Point', coordinates:e.coords },
+                   properties:{ title:e.title, severity:e.severity, source:e.source } }));
+    const data = { type:'FeatureCollection', features: feats };
+    if (map.getSource(k)) { map.getSource(k).setData(data); continue; }
+    map.addSource(k, { type:'geojson', data });
+    map.addLayer({ id:k, type:'circle', source:k, paint:{
+      'circle-radius':['interpolate',['linear'],['get','severity'],1,5,5,16],
+      'circle-color': t.color, 'circle-opacity':0.85,
+      'circle-stroke-color':'#fff', 'circle-stroke-width':1 } });
+    map.setLayoutProperty(k, 'visibility', visible[k] ? 'visible' : 'none');
+  }
+}
+
+function buildLayerToggles(){
+  const box = document.getElementById('layers');
+  box.textContent = '';
+  for (const [k, t] of Object.entries(TYPES)) {
+    const cb = el('input', { type:'checkbox' });
+    cb.checked = true;
+    cb.addEventListener('change', () => {
+      visible[k] = cb.checked;
+      if (mapReady && map.getLayer(k)) map.setLayoutProperty(k, 'visibility', cb.checked ? 'visible' : 'none');
+      renderFeed();
+    });
+    const dot = el('span', { class:'dot' });
+    dot.style.background = t.color;
+    box.appendChild(el('label', { class:'layer' }, [cb, dot, el('span', { text:t.label })]));
+  }
+}
+
+/* ---------- Panels ---------- */
+function renderGauges(domains, methodText){
+  const g = document.getElementById('gauges');
+  g.textContent = '';
+  domains.forEach(([name, v]) => {
+    const fill = el('span'); fill.style.width = v + '%'; fill.style.background = colorFor(v);
+    g.appendChild(el('div', { class:'card' }, [
+      el('div', { class:'metric' }, [el('span', { text:name }), el('b', { text:String(v) })]),
+      el('div', { class:'bar' }, [fill]),
+    ]));
+  });
+  const composite = Math.round(domains.reduce((a,[,v]) => a + v, 0) / domains.length);
+  document.getElementById('composite').textContent = composite + '/100';
+  const bar = document.getElementById('composite-bar');
+  bar.style.width = composite + '%'; bar.style.background = colorFor(composite);
+  document.getElementById('integrity').textContent = (100 - composite) + '/100';
+  document.getElementById('method').textContent = methodText;
+}
+
+function renderFeed(){
+  const feed = document.getElementById('feed');
+  feed.textContent = '';
+  const list = currentEvents
+    .filter(e => visible[e.type])
+    .sort((a,b) => (b.severity - a.severity) || String(b.date).localeCompare(String(a.date)))
+    .slice(0, 60);
+  if (!list.length) { feed.appendChild(el('div', { class:'empty', text:'No events to show.' })); return; }
+  list.forEach(e => {
+    const cls = e.severity >= 4 ? 'high' : e.severity === 3 ? 'med' : '';
+    const meta = 'Severity ' + e.severity + '/5' + (e.date && e.date !== 'sample' ? ' · ' + e.date : '');
+    feed.appendChild(el('div', { class:'feed-item ' + cls }, [
+      el('span', { class:'tag', text:(TYPES[e.type] ? TYPES[e.type].label : e.type).toUpperCase() }),
+      linkEl(e.title, e.source), el('br'), el('small', { text:meta }),
+    ]));
+  });
+}
+
+/* ---------- Data ---------- */
+function normalise(raw){
+  const arr = Array.isArray(raw) ? raw : (raw && raw.events) || [];
+  return arr.filter(e => e && TYPES[e.type] && e.title).map(e => ({
+    type:e.type, title:String(e.title), source:e.source || e.link || '',
+    severity: Math.max(1, Math.min(5, Number(e.severity) || 2)),
+    date: e.date || '', coords: Array.isArray(e.coords) ? e.coords : null,
+  }));
+}
+
+function showSample(){
+  currentEvents = SAMPLE_EVENTS;
+  const m = document.getElementById('mode'); m.textContent = 'SAMPLE DATA'; m.classList.remove('live');
+  renderGauges(SAMPLE_DOMAINS, 'Placeholder numbers for layout only. They are not real measurements.');
+  document.getElementById('sync').textContent = 'n/a (sample)';
+  renderFeed(); drawMarkers();
+}
+
+function showLive(raw){
+  const events = normalise(raw);
+  if (!events.length) return showSample();
+  currentEvents = events;
+  const cutoff = Date.now() - 7 * 86400000;
+  const domains = Object.entries(TYPES).map(([k, t]) => {
+    const sum = events.filter(e => e.type === k && (!e.date || isNaN(Date.parse(e.date)) || Date.parse(e.date) >= cutoff))
+                      .reduce((a, e) => a + e.severity, 0);
+    return [t.label, Math.min(100, sum * 4)];
+  });
+  const m = document.getElementById('mode'); m.textContent = 'LIVE DATA'; m.classList.add('live');
+  renderGauges(domains, 'Event pressure = sum of event severities in the last 7 days x 4, capped at 100. A rough indicator, not a forecast.');
+  const when = raw && raw.generatedAt ? new Date(raw.generatedAt) : new Date();
+  document.getElementById('sync').textContent = isNaN(when) ? '-' : when.toLocaleString();
+  renderFeed(); drawMarkers();
+}
+
+async function load(){
+  try {
+    const res = await fetch(DATA_URL, { cache:'no-store' });
+    if (!res.ok) throw new Error(res.status);
+    showLive(await res.json());
+  } catch (e) { showSample(); }
+}
+
+buildLayerToggles();
+initMap();
+showSample();   // render immediately, then upgrade if live data exists
+load();
+</script>
+</body>
+</html>
